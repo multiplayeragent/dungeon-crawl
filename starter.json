@@ -1,0 +1,21 @@
+{
+  "name": "Dungeon Crawl",
+  "genre": "rpg",
+  "dim": "2D",
+  "mode": "Co-op",
+  "players": "1–4",
+  "hook": "Clear it room by room. Loot as a team.",
+  "how": "Each floor is a chain of rooms full of monsters. Clear a room to open the next door, grab the loot before your friends do, and find the stairs to go deeper.",
+  "controls": "WASD or arrows and Space, or the thumb stick and Attack button",
+  "uses": [
+    ["Host-run rules", "The host's browser runs the monsters, the loot drops and the room clears; if it leaves, the next player takes over."],
+    ["Leaderboard", "The deepest floor each player reached."],
+    ["Bots", "AI companions fight beside you until enough people join."],
+    ["Live sync", "Everyone sees the same dungeon, monsters and swings as they happen."]
+  ],
+  "ideas": [
+    "Add a mage and an archer class",
+    "Add a shop between floors",
+    "Add a boss on floor 5"
+  ]
+}
