@@ -171,7 +171,8 @@ function livePlayers() {
   }
   return out.sort();
 }
-const isHost = () => livePlayers()[0] === net.sessionId;
+let hostHold = 0, lastTick = performance.now(); // lastTick: when frame() last ran; hostHold: after a freeze, no hosting before this time (see frame())
+const isHost = () => performance.now() > hostHold && performance.now() - lastTick < 1000 && livePlayers()[0] === net.sessionId; // a tab whose loop has stopped doesn't host
 const humans = () => livePlayers();
 
 // ── DUNGEON ─────────────────────────────────────────────────────────────────────────
@@ -380,7 +381,7 @@ function hostTick(dt, now) {
   if (f.phase === "descend" && t > f.endsAt) startFloor(f.n + 1, f.id + 1);
   if (f.phase === "over" && t > f.endsAt) startFloor(1, f.id + 1);
   botsTick(dt, t);
-  if (host.dirtyF && now - host.lastF > 150) { host.dirtyF = false; host.lastF = now; host.f.v++; net.setShared("floor", JSON.stringify(host.f)); } // host.f: a new floor may have just replaced f
+  if (host.dirtyF && now - host.lastF > 150) { host.dirtyF = false; host.lastF = now; host.f.v = Math.max(host.f.v, shared("floor", null)?.v ?? 0) + 1; net.setShared("floor", JSON.stringify(host.f)); } // host.f: a new floor may have just replaced f
   if (host.dirtyL) { host.dirtyL = false; net.setShared("loot", JSON.stringify(host.loot.map((l) => [l.i, l.k, l.x, l.y]))); }
   if (now - host.lastM > 100) { host.lastM = now; net.setShared("mobs", JSON.stringify(host.mobs.map((m) => [m.i, m.t, +m.x.toFixed(2), +m.y.toFixed(2), Math.ceil(m.hp), m.a > t ? 1 : 0, m.k]))); }
   if (now - host.lastB > 100) { host.lastB = now; net.setShared("bots", JSON.stringify(botList().map((b) => ({ ...b, x: +b.x.toFixed(2), y: +b.y.toFixed(2), f: +b.f.toFixed(2) })))); }
@@ -726,6 +727,8 @@ function fixMyColor() {
 let last = performance.now(), lastHb = 0, lastHud = 0;
 function frame(now) {
   requestAnimationFrame(frame);
+  if (performance.now() - lastTick > 1000) { hostHold = performance.now() + 700; host.wasHost = false; } // the tab was frozen or in the background: someone else may have hosted meanwhile, so let its state arrive, then adopt it
+  lastTick = performance.now(); // not the rAF time: after a long freeze Chrome can stamp the first frame from before it ended
   const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now; // never negative: the first frame can be stamped before `last`
   if (now - lastHb > 1000) { lastHb = now; net.me.set("hb", Date.now()); fixMyColor(); }
   readKeys();
