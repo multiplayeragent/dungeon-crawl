@@ -75,7 +75,7 @@
  *   - Intents to the host: "hit" {m, d} when your swing reaches a monster, "pick" {i}
  *     to grab loot (the first one to ask gets it, recorded in floor.awards),
  *     "descend" on the open stairs and "again" for a new run.
- *   - Monsters hurt players with a "hurt" {to, d} event; the player takes it off its own hp.
+ *   - Monsters hurt players with a "hurt" {to, d} event from the host; the player takes it off its own hp.
  *   - ?attract plays offline with companions only (the preview video is recorded from it).
  *   - Leaderboard "deepest-floor": the deepest floor each player reached.
  */
@@ -249,6 +249,7 @@ const lootList = () => (hosting() ? host.loot : shared("loot", [], (l) => l.map(
 const botList = () => (hosting() ? [...host.bots.values()].map((b) => ({ i: b.id, n: b.n, c: b.c, x: b.x, y: b.y, f: b.f, hp: b.hp, mhp: b.mhp, sw: b.sw, dn: b.dn ? 1 : 0, a: b.atk, d: b.def })) : shared("bots", [])); // a, d: a companion's sword and shield bonuses, so a new host keeps them
 const scale = (n) => 1 + CONFIG.growth * (n - 1);
 const maxHp = (t, n) => Math.round(CONFIG.monsters[t].hp * scale(n));
+const biteDmg = (t, n) => Math.round(CONFIG.monsters[t].dmg * (1 + 0.12 * (n - 1)) * (ATTRACT ? 0.35 : 1)); // bites get 12% harder each floor
 const allCleared = (f) => D && f.cleared.length >= D.rooms.length;
 
 function startFloor(n, id) {
@@ -304,14 +305,16 @@ function party(includeDown) {
 }
 const actor = (id) => party(true).find((p) => p.id === id);
 
-/** "hit": a player's swing reached monster m for d damage. The host checks the reach and applies it. */
+/** A hero's damage per swing: a companion's own, mine, or what a player's `st` says (its swords). */
+const atkOf = (id) => (host.bots.get(id)?.atk ?? (id === net.sessionId ? me.atk : parse(S.entities.players[id]?.st, null)?.atk) ?? CONFIG.atk);
+/** "hit": a hero's swing reached monster m for d damage. The host checks the hero is up and in reach, the monster awake, and the damage. */
 function applyHit(msg, from) {
-  const m = host.mobs.find((x) => x.i === msg.m), p = actor(from);
-  if (!m || !p || Math.hypot(p.x - m.x, p.y - m.y) > CONFIG.reach + 1.6) return;
+  const m = host.mobs.find((x) => x.i === msg.m), p = party(false).find((x) => x.id === from);
+  if (!m || !p || host.f.phase !== "play" || !host.f.awake.includes(m.k) || Math.hypot(p.x - m.x, p.y - m.y) > CONFIG.reach + 1.6) return;
   const key = from + ":" + m.i, t = performance.now();
   if (t - (host.hitAt.get(key) || 0) < 200) return;
   host.hitAt.set(key, t);
-  m.hp -= Math.max(1, Math.min(60, +msg.d || 0));
+  m.hp -= Math.max(1, Math.min(atkOf(from), +msg.d || 0));
   const dx = m.x - p.x, dy = m.y - p.y, dd = Math.hypot(dx, dy) || 1;
   moveBody(m, (dx / dd) * 0.4, (dy / dd) * 0.4, CONFIG.monsters[m.t].size); m.cd = Math.max(m.cd, 0.3);
   if (m.hp > 0) return;
@@ -374,7 +377,7 @@ function hostTick(dt, now) {
         const sx = m.x - o.x, sy = m.y - o.y, sd = Math.hypot(sx, sy), min = (M.size + CONFIG.monsters[o.t].size) * 0.9;
         if (o !== m && sd < min && sd > 0.001) moveBody(m, (sx / sd) * (min - sd) * 0.5, (sy / sd) * (min - sd) * 0.5, M.size);
       }
-      if (bd <= M.reach + 0.35 && m.cd <= 0) { m.cd = M.every; m.a = t + 260; bite(best, Math.round(M.dmg * (1 + 0.12 * (f.n - 1)) * (ATTRACT ? 0.35 : 1))); }
+      if (bd <= M.reach + 0.35 && m.cd <= 0) { m.cd = M.every; m.a = t + 260; bite(best, biteDmg(m.t, f.n)); }
     }
     if (party(true).length && !party(false).length) { Object.assign(f, { phase: "over", endsAt: t + CONFIG.resultsMs }); host.dirtyF = true; }
   }
@@ -505,8 +508,10 @@ function publish(force) {
   const st = JSON.stringify({ atk: me.atk, def: me.def, gold: me.gold });
   if (st !== me.sentSt) { me.sentSt = st; net.me.set("st", st); }
 }
-const act = (type, data = {}) => (isHost() ? (type === "descend" ? applyDescend() : type === "again" ? applyAgain() : 0) : net.send(type, data));
-function applyDescend() { const f = host.f; if (f && f.phase === "play" && allCleared(f)) { Object.assign(f, { phase: "descend", endsAt: Date.now() + CONFIG.descendMs }); host.dirtyF = true; } }
+const act = (type, data = {}) => (isHost() ? (type === "descend" ? applyDescend(net.sessionId) : type === "again" ? applyAgain() : 0) : net.send(type, data));
+function applyDescend(from) {
+  const f = host.f, p = party(false).find((x) => x.id === from); // only a hero standing on the stairs can take the party down
+  if (f && f.phase === "play" && allCleared(f) && p && Math.hypot(p.x - D.stairs.x - 0.5, p.y - D.stairs.y - 0.5) < 1.6) { Object.assign(f, { phase: "descend", endsAt: Date.now() + CONFIG.descendMs }); host.dirtyF = true; } }
 function applyAgain() { const f = host.f; if (f && f.phase === "over") startFloor(1, f.id + 1); }
 
 // ── DRAW ────────────────────────────────────────────────────────────────────────────
@@ -748,9 +753,9 @@ function frame(now) {
   net.onState((st) => { S = st; });
   net.on("hit", (m, from) => { if (isHost() && m) applyHit(m, from); });
   net.on("pick", (m, from) => { if (isHost() && m) applyPick(m, from); });
-  net.on("descend", () => { if (isHost()) applyDescend(); });
+  net.on("descend", (m, from) => { if (isHost()) applyDescend(from); });
   net.on("again", () => { if (isHost()) applyAgain(); });
-  net.on("hurt", (m) => { if (!m) return; if (m.to === net.sessionId) hurtMe(+m.d || 0); });
+  net.on("hurt", (m, from) => { if (m && m.to === net.sessionId && from === livePlayers()[0]) hurtMe(Math.min(+m.d || 0, Math.max(...CONFIG.monsters.map((M, t) => biteDmg(t, floorMeta()?.n || 1))))); }); // only the host's monsters bite, no harder than they can
   net.onDisconnect(() => { dropped = true; $("net").textContent = "Reconnecting…"; });
   net.onReconnect(() => { dropped = false; });
   if (!net.offline && typeof MP !== "undefined") boardApi = MP.auth({ key: MP_CONNECT.key, apiUrl: MP_CONNECT.apiUrl }).leaderboard(CONFIG.board);
